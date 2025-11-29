@@ -419,6 +419,78 @@ def push_flow() -> None:
         print("[INFO] Push 完了しました。")
 
 
+def list_remote_commits(branch: str, limit: int = 15) -> List[Tuple[str, str, str]]:
+    """Return a list of (sha, date, message) for the remote branch."""
+    cp = run_git(
+        "log",
+        f"{DEFAULT_REMOTE_NAME}/{branch}",
+        f"-{limit}",
+        "--date=format:%Y-%m-%d %H:%M",
+        "--pretty=format:%h|%ad|%s",
+    )
+    commits: List[Tuple[str, str, str]] = []
+    for line in cp.stdout.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("|", 2)
+        if len(parts) == 3:
+            commits.append((parts[0], parts[1], parts[2]))
+    return commits
+
+
+def pull_latest(branch: str) -> None:
+    if not ensure_branch(branch):
+        return
+    cp = run_git("pull", DEFAULT_REMOTE_NAME, branch)
+    if cp.returncode != 0:
+        print(cp.stderr)
+    else:
+        print(f"[INFO] {branch} を最新状態にしました。")
+
+
+def checkout_past_commit(branch: str) -> None:
+    commits = list_remote_commits(branch)
+    if not commits:
+        print(f"[WARN] {branch} のコミット履歴が取得できませんでした。")
+        return
+    print(f"[INFO] {branch} の過去コミット一覧 (最新 {len(commits)} 件)")
+    for idx, (sha, date, msg) in enumerate(commits, 1):
+        print(f"[{idx:02}] {date} {sha} {msg}")
+    sel = input(f"番号を入力 (1-{len(commits)} / Enter で中止): ").strip()
+    if not sel.isdigit():
+        print("[INFO] 中止しました。")
+        return
+    num = int(sel)
+    if num < 1 or num > len(commits):
+        print("[WARN] 範囲外の番号です。")
+        return
+    sha, date, msg = commits[num - 1]
+    print(f"[INFO] {date} {sha} {msg} を checkout --detach します。")
+    if count_changes() > 0 and not input_yes_no("未コミットの変更があります。続行しますか?", default=False):
+        return
+    cp = run_git("checkout", "--detach", sha)
+    if cp.returncode != 0:
+        print(cp.stderr)
+    else:
+        print("[INFO] 過去バージョンをチェックアウトしました。")
+
+
+def pull_flow() -> None:
+    branch = select_branch_channel()
+    print(f"[INFO] {DEFAULT_REMOTE_NAME} から {branch} をフェッチします。")
+    cp = run_git("fetch", DEFAULT_REMOTE_NAME, branch)
+    if cp.returncode != 0:
+        print(cp.stderr)
+        return
+    print("[1] 最新を pull")
+    print("[2] 過去コミットを一覧から選択")
+    choice = input("番号を入力 (1): ").strip() or "1"
+    if choice == "2":
+        checkout_past_commit(branch)
+    else:
+        pull_latest(branch)
+
+
 def input_yes_no(message: str, default: bool = False) -> bool:
     suffix = "[Y/n]" if default else "[y/N]"
     ans = input(f"{message} {suffix}: ").strip().lower()

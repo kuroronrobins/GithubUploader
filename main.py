@@ -1,18 +1,17 @@
-#!/usr/bin/env python3
-# -*- coding:utf-8 -*-
-"""
-Dummy entry point meant solely for exe creation. It reports the app version
-read from version_info.json and exits.
-"""
-
 from pathlib import Path
 import json
 import sys
 
+def base_dir() -> Path:
+    # PyInstaller などで「凍結」されているか判定
+    if getattr(sys, "frozen", False):
+        # exe ファイルのあるフォルダ
+        return Path(sys.executable).resolve().parent
+    # 通常のスクリプト実行
+    return Path(__file__).resolve().parent
 
 def version_info_path() -> Path:
-    return Path(__file__).resolve().parent / "_version_info.json"
-
+    return base_dir() / "_version_info.json"
 
 def load_app_version() -> str:
     path = version_info_path()
@@ -24,12 +23,10 @@ def load_app_version() -> str:
     except Exception:
         return "0.0.0"
 
-
 def main() -> None:
     version = load_app_version()
     print(f"GitHubSync exe stub version {version}")
     sys.exit(0)
-
 
 if __name__ == "__main__":
     main()
