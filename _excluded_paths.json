@@ -1,0 +1,8 @@
+{
+  "paths": [
+    "dist/",
+    "build/",
+    ".git/",
+    "__pycache__"
+  ]
+}

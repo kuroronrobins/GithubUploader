@@ -61,7 +61,7 @@ def base_dir() -> Path:
 
 
 def version_file_path() -> Path:
-    return base_dir() / "version_info.json"
+    return base_dir() / "_version_info.json"
 
 
 def load_version_info() -> Dict[str, str]:
