@@ -56,6 +56,7 @@ OPENAI_REASONING_EFFORT_PRIMARY = "medium"
 
 _openai_client: Optional["OpenAI"] = None
 _exe_name = "main"
+_remote_url = ""
 
 
 def base_dir() -> Path:
@@ -200,6 +201,8 @@ def ensure_remote() -> str:
     if cp.returncode == 0:
         url = cp.stdout.strip()
         set_exe_name_from_remote(url)
+        global _remote_url
+        _remote_url = url
         return url
     print(f"[INFO] remote {DEFAULT_REMOTE_NAME} を設定します。")
     url = input("remote URL (例: https://github.com/kuroronrobins/REPO.git): ").strip()
@@ -207,6 +210,7 @@ def ensure_remote() -> str:
         url = input("remote URL を入力してください: ").strip()
     run_git("remote", "add", DEFAULT_REMOTE_NAME, url)
     set_exe_name_from_remote(url)
+    _remote_url = url
     return url
 
 
@@ -351,10 +355,231 @@ def require_stable_password() -> bool:
             return False
 
 
+def build_bootstrap_entry_script() -> Path:
+    owner, repo = parse_github_repo(_remote_url) if _remote_url else (None, None)
+    owner = owner or "kuroronrobins"
+    repo = repo or (_exe_name or "unknown-repo")
+    branch = DEFAULT_STABLE_BRANCH
+    exe_basename = _exe_name if _exe_name.lower().endswith(".exe") else f"{_exe_name}.exe"
+    bootstrap_path = PYINSTALLER_BUILD / "_bootstrap_entry.py"
+    PYINSTALLER_BUILD.mkdir(parents=True, exist_ok=True)
+    template = """#!/usr/bin/env python3
+\"\"\"Auto-generated bootstrap with self-update for the built exe.\"\"\"
+import json
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Optional
+
+try:
+    import tkinter as tk
+    from tkinter import ttk
+except Exception:
+    tk = None
+    ttk = None
+
+GITHUB_OWNER = "{owner}"
+GITHUB_REPO = "{repo}"
+GITHUB_BRANCH = "{branch}"
+EXE_BASENAME = "{exe_basename}"
+VERSION_FILE_NAME = "_version_info.json"
+HTTP_TIMEOUT = 8
+
+
+def base_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def version_info_path() -> Path:
+    return base_dir() / VERSION_FILE_NAME
+
+
+def load_local_version() -> str:
+    path = version_info_path()
+    if not path.exists():
+        return "0.0.0"
+    try:
+        info = json.loads(path.read_text(encoding="utf-8"))
+        return info.get("stable", info.get("develop", "0.0.0"))
+    except Exception:
+        return "0.0.0"
+
+
+def build_raw_url(path: str) -> str:
+    return f"https://raw.githubusercontent.com/{{GITHUB_OWNER}}/{{GITHUB_REPO}}/{{GITHUB_BRANCH}}/{{path.lstrip('/') }}"
+
+
+def fetch_text(url: str) -> Optional[str]:
+    try:
+        with urllib.request.urlopen(url, timeout=HTTP_TIMEOUT) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+    except (urllib.error.URLError, TimeoutError, ConnectionError):
+        return None
+
+
+def fetch_binary_with_progress(url: str, ui) -> Optional[bytes]:
+    try:
+        with urllib.request.urlopen(url, timeout=HTTP_TIMEOUT) as resp:
+            total = int(resp.headers.get("Content-Length", "0") or 0)
+            chunks = []
+            downloaded = 0
+            while True:
+                buf = resp.read(64 * 1024)
+                if not buf:
+                    break
+                chunks.append(buf)
+                downloaded += len(buf)
+                if ui:
+                    percent = (downloaded / total * 100) if total else 0
+                    ui.set_progress(percent, downloaded, total)
+            return b"".join(chunks)
+    except (urllib.error.URLError, TimeoutError, ConnectionError):
+        return None
+
+
+def parse_remote_version(text: str) -> str:
+    try:
+        info = json.loads(text)
+        return info.get("stable", info.get("develop", "0.0.0"))
+    except Exception:
+        return "0.0.0"
+
+
+def version_tuple(ver: str) -> tuple:
+    parts = []
+    for part in ver.split("."):
+        try:
+            parts.append(int(part))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts)
+
+
+def has_newer_version(local_ver: str, remote_ver: str) -> bool:
+    return version_tuple(remote_ver) > version_tuple(local_ver)
+
+
+class UpdaterUI:
+    def __init__(self):
+        if tk is None or ttk is None:
+            raise RuntimeError("tkinter unavailable")
+        self.root = tk.Tk()
+        self.root.title("GitHubSync アップデート")
+        self.root.geometry("360x140")
+        self.root.resizable(False, False)
+        self.label = tk.Label(self.root, text="新しいバージョンを確認しています...", anchor="w", justify="left", padx=10, pady=10)
+        self.label.pack(fill="x")
+        self.progress = ttk.Progressbar(self.root, orient="horizontal", mode="determinate", length=320, maximum=100)
+        self.progress.pack(padx=10, pady=(0, 4))
+        self.detail = tk.Label(self.root, text="", anchor="w", justify="left", padx=10)
+        self.detail.pack(fill="x")
+        self._refresh()
+
+    def set_status(self, text: str) -> None:
+        self.label.config(text=text)
+        self._refresh()
+
+    def set_progress(self, percent: float, downloaded: int, total: int) -> None:
+        self.progress["value"] = max(0, min(100, percent))
+        if total > 0:
+            self.detail.config(text=f"{{downloaded//1024}}KB / {{total//1024}}KB")
+        else:
+            self.detail.config(text=f"{{downloaded//1024}}KB")
+        self._refresh()
+
+    def close(self) -> None:
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+
+    def _refresh(self) -> None:
+        try:
+            self.root.update_idletasks()
+            self.root.update()
+        except Exception:
+            pass
+
+
+def replace_and_restart(downloaded_path: Path, target_path: Path) -> None:
+    ps_script = f"\\n$src = '{{{{downloaded_path}}}}'\\n$dst = '{{{{target_path}}}}'\\nStart-Sleep -Milliseconds 900\\nCopy-Item -Path $src -Destination $dst -Force\\nStart-Process -FilePath $dst\\n"
+    subprocess.Popen(
+        ["powershell", "-NoProfile", "-Command", ps_script],
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    sys.exit(0)
+
+
+def try_self_update(local_version: str) -> None:
+    version_url = build_raw_url(VERSION_FILE_NAME)
+    ui = UpdaterUI() if tk else None
+    if ui:
+        ui.set_status("新しいバージョンを確認しています...")
+    text = fetch_text(version_url)
+    if not text:
+        if ui:
+            ui.close()
+        return
+    remote_version = parse_remote_version(text)
+    if not has_newer_version(local_version, remote_version):
+        if ui:
+            ui.close()
+        return
+    exe_url = build_raw_url(f"dist/{{EXE_BASENAME}}")
+    if ui:
+        ui.set_status("新しいバージョンをダウンロードしています...")
+    data = fetch_binary_with_progress(exe_url, ui)
+    if not data:
+        if ui:
+            ui.close()
+        return
+    if ui:
+        ui.set_status("更新を適用しています...")
+        ui.set_progress(100, len(data), len(data))
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        tmp.write(data)
+        tmp_path = Path(tmp.name)
+    current_exe = Path(sys.executable).resolve()
+    if ui:
+        ui.close()
+    replace_and_restart(tmp_path, current_exe)
+
+
+def run_original_main():
+    try:
+        import main
+        if hasattr(main, "main"):
+            main.main()
+        else:
+            print("main.main() が見つかりません。")
+    except Exception as exc:
+        print(f"main の実行中にエラー: {exc}")
+
+
+def _entry():
+    local_version = load_local_version()
+    if getattr(sys, "frozen", False):
+        try_self_update(local_version)
+    run_original_main()
+
+
+if __name__ == "__main__":
+    _entry()
+"""
+    content = template.format(owner=owner, repo=repo, branch=branch, exe_basename=exe_basename)
+    bootstrap_path.write_text(content, encoding="utf-8")
+    return bootstrap_path
+
 def build_exe(additional_opts: Optional[List[str]] = None) -> bool:
     opts = PYINSTALLER_OPTS.copy()
     if additional_opts:
         opts.extend(additional_opts)
+    data_sep = ";" if os.name == "nt" else ":"
     opts.extend(
         [
             "--distpath",
@@ -365,11 +590,14 @@ def build_exe(additional_opts: Optional[List[str]] = None) -> bool:
             str(PYINSTALLER_BUILD),
             "--name",
             _exe_name,
+            "--add-data",
+            f"{version_file_path()}{data_sep}.",
         ]
     )
+    bootstrap_entry = build_bootstrap_entry_script()
     PYINSTALLER_BUILD.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
-    cmd = ["pyinstaller", *opts, "main.py"]
+    cmd = ["pyinstaller", *opts, str(bootstrap_entry)]
     print("[INFO] " + " ".join(cmd))
     cp = subprocess.run(cmd, cwd=base_dir(), env=env)
     return cp.returncode == 0
