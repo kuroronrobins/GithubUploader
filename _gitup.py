@@ -42,7 +42,7 @@ AUTO_COMMIT_PREFIX = "chore:"
 PYINSTALLER_OPTS = ["--onefile", "--clean"]
 PYINSTALLER_DIST = Path("dist")
 PYINSTALLER_BUILD = Path("build")
-EXCLUDED_PATHS = {"dist/", "build/", ".git/", "_excluded_paths.json"}
+EXCLUDED_PATHS = {"_excluded_paths.json"}
 VERSION_FILE = "_version_info.json"
 
 ENCODED_OPENAI_API_KEY = (

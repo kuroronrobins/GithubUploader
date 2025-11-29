@@ -1,6 +1,5 @@
 {
   "stable": "0.0.0",
   "develop": "0.0.0",
-  "app_name": "GitHubSync"
-  "remote_url": "https://github.com/kuroronrobins/GithubUploader.git",
+  "exe_name": ""
 }
