@@ -396,7 +396,17 @@ def base_dir() -> Path:
 
 
 def version_info_path() -> Path:
-    return base_dir() / VERSION_FILE_NAME
+    exe_dir = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+    primary = exe_dir / VERSION_FILE_NAME
+    if primary.exists():
+        return primary
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            bundled = Path(meipass) / VERSION_FILE_NAME
+            if bundled.exists():
+                return bundled
+    return primary
 
 
 def load_local_version() -> str:
@@ -410,8 +420,20 @@ def load_local_version() -> str:
         return "0.0.0"
 
 
+def save_local_version(version: str) -> None:
+    path = version_info_path()
+    try:
+        data = {}
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+        data["stable"] = version
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def build_raw_url(path: str) -> str:
-    return f"https://raw.githubusercontent.com/{{GITHUB_OWNER}}/{{GITHUB_REPO}}/{{GITHUB_BRANCH}}/{{path.lstrip('/') }}"
+    return f"https://raw.githubusercontent.com/{{GITHUB_OWNER}}/{{GITHUB_REPO}}/{{GITHUB_BRANCH}}/{{{{path.lstrip('/')}}}}"
 
 
 def fetch_text(url: str) -> Optional[str]:
@@ -550,6 +572,7 @@ def try_self_update(local_version: str) -> None:
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp.write(data)
         tmp_path = Path(tmp.name)
+    save_local_version(remote_version)
     current_exe = Path(sys.executable).resolve()
     if ui:
         ui.close()
