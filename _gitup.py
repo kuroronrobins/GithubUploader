@@ -507,7 +507,13 @@ class UpdaterUI:
 
 
 def replace_and_restart(downloaded_path: Path, target_path: Path) -> None:
-    ps_script = f"\\n$src = '{{{{downloaded_path}}}}'\\n$dst = '{{{{target_path}}}}'\\nStart-Sleep -Milliseconds 900\\nCopy-Item -Path $src -Destination $dst -Force\\nStart-Process -FilePath $dst\\n"
+    ps_script = (
+        "\\n$src = '{{downloaded_path}}'\\n"
+        "$dst = '{{target_path}}'\\n"
+        "Start-Sleep -Milliseconds 900\\n"
+        "Copy-Item -Path $src -Destination $dst -Force\\n"
+        "Start-Process -FilePath $dst\\n"
+    )
     subprocess.Popen(
         ["powershell", "-NoProfile", "-Command", ps_script],
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
