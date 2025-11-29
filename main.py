@@ -11,7 +11,7 @@ import sys
 
 
 def version_info_path() -> Path:
-    return Path(__file__).resolve().parent / "version_info.json"
+    return Path(__file__).resolve().parent / "_version_info.json"
 
 
 def load_app_version() -> str:
