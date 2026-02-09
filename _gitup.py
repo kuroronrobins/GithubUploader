@@ -377,6 +377,7 @@ def build_exe(cfg: AppConfig, extra_pyinstaller_opts: Optional[List[str]] = None
     inside the bootstrap at runtime.
     """
     ensure_git_repo()
+    detect_remote_url_silent(cfg)
     exe_name = cfg.exe_name or "main"
     if shutil.which("pyinstaller") is None:
         print("[WARN] pyinstaller is not available in PATH. Skipping build.")
@@ -701,6 +702,7 @@ def checkout_past_commit(branch: str) -> None:
 
 def pull_flow(cfg: AppConfig) -> None:
     ensure_git_repo()
+    detect_remote_url_silent(cfg)
     ensure_git_identity()
     remote_url = ensure_remote(cfg)
     if not remote_url:
@@ -721,6 +723,7 @@ def pull_flow(cfg: AppConfig) -> None:
 
 def push_flow(cfg: AppConfig) -> None:
     ensure_git_repo()
+    detect_remote_url_silent(cfg)
     ensure_git_identity()
     ensure_gitignore(cfg)
 
@@ -817,6 +820,16 @@ def push_flow(cfg: AppConfig) -> None:
 
 
 
+
+
+def detect_remote_url_silent(cfg: AppConfig) -> None:
+    """Best-effort: read origin URL and persist into config without prompting."""
+    cp = run_git(["remote", "get-url", DEFAULT_REMOTE_NAME])
+    if cp.returncode == 0:
+        url = cp.stdout.strip()
+        if url and url != cfg.remote_url:
+            cfg.remote_url = url
+            save_config(cfg)
 def build_flow(cfg: AppConfig) -> None:
     """
     Manual build (dev/testing).
@@ -826,6 +839,7 @@ def build_flow(cfg: AppConfig) -> None:
     - The updater compares versions using the embedded config field: version.stable.
       If you build locally without setting a version, it will be treated as 0.0.0 and you'll always see an update prompt.
     """
+    detect_remote_url_silent(cfg)  # ensure remote_url is embedded for self-update
     print("[INFO] Build exe (local test).")
     print("[INFO] To publish a new version for auto-update, use: Push -> Stable and answer YES to publish.")
     print("[INFO] That flow builds AFTER the version is decided, preventing version mismatches.")
@@ -874,6 +888,7 @@ def configure_flow(cfg: AppConfig) -> AppConfig:
 
 def status_flow(cfg: AppConfig) -> None:
     ensure_git_repo()
+    detect_remote_url_silent(cfg)
     ensure_git_identity()
     ensure_gitignore(cfg)
     print_header(cfg)

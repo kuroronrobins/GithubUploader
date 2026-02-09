@@ -217,6 +217,7 @@ def replace_and_restart_windows(downloaded: Path, target: Path) -> None:
 
     lines = [
         "@echo off",
+        "chcp 65001 >nul",
         "setlocal EnableDelayedExpansion",
         f'set "SRC={downloaded}"',
         f'set "DST={target}"',
@@ -226,6 +227,7 @@ def replace_and_restart_windows(downloaded: Path, target: Path) -> None:
         f'set "PID={pid}"',
         "del \"%LOG%\" >nul 2>&1",
         "call :LOG Updater started",
+        "for %%I in (\"%DST%\") do set \"DSTDIR=%%~dpI\"",
         ":WAITLOOP",
         'tasklist /FI "PID eq %PID%" | find "%PID%" >nul',
         "if %errorlevel%==0 (",
@@ -241,7 +243,13 @@ def replace_and_restart_windows(downloaded: Path, target: Path) -> None:
         "move /Y \"%DSTNEW%\" \"%DST%\" >>\"%LOG%\" 2>&1",
         "if %errorlevel% neq 0 (call :LOG Move DSTNEW->DST failed & goto END)",
         "call :LOG Restarting",
-        "start \"\" \"%DST%\"",
+        "call :LOG Launching updated exe (cmd start)",
+        "start \"\" /D \"%DSTDIR%\" \"%DST%\"",
+        "if %errorlevel% neq 0 (",
+        "  call :LOG cmd start failed; trying PowerShell Start-Process",
+        "  %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"Start-Process -FilePath '%DST%' -WorkingDirectory '%DSTDIR%'\" >>\"%LOG%\" 2>&1",
+        "  if %errorlevel% neq 0 (call :LOG PowerShell Start-Process failed & goto END)",
+        ")",
         "del /F /Q \"%SRC%\" >nul 2>&1",
         "call :LOG Updater finished",
         ":END",
@@ -250,7 +258,8 @@ def replace_and_restart_windows(downloaded: Path, target: Path) -> None:
         'echo [%date% %time%] %*>>"%LOG%"',
         "exit /b 0",
     ]
-    bat_path.write_text("\r\n".join(lines), encoding="utf-8")
+    # Use UTF-8 with BOM so Windows cmd handles non-ASCII paths reliably.
+    bat_path.write_text("\r\n".join(lines), encoding="utf-8-sig")
     print("[UPDATE] Applying update and restarting...")
     print(f"[UPDATE] Updater batch: {bat_path}")
     print(f"[UPDATE] Updater log:  {log_path}")
@@ -282,7 +291,8 @@ def replace_and_restart(downloaded: Path, target: Path) -> None:
 def try_self_update(config: Dict[str, object], local_ver: str) -> bool:
     url = remote_url(config)
     if not url:
-        dbg("Remote URL not set; skipping update check.")
+        print("[UPDATE] Remote repository is not embedded in this exe; skipping update check.")
+        dbg("Remote URL not set in embedded config.")
         return False
 
     parsed = parse_remote(url)
@@ -293,6 +303,7 @@ def try_self_update(config: Dict[str, object], local_ver: str) -> bool:
 
     info = get_release_info(owner, repo)
     if not info:
+        print("[UPDATE] Release manifest not found or invalid; skipping update.")
         dbg("No release info found; skipping update.")
         return False
 
