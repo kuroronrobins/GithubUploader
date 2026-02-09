@@ -4,9 +4,9 @@
     "exe_name": "main"
   },
   "channel": "stable",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "exe_path": "release/latest/main.exe",
-  "sha256": "c69c0fcf76cd5d77566cf2c8f2d745ea60d1c4df082843e1005dc76a0705d623",
-  "size": 7798280,
-  "published_at": "2026-02-09T07:19:50.653933Z"
+  "sha256": "5e0297affc09275282dd688a0064079f33eda168c581ed7a336a39dfd635afbf",
+  "size": 7797640,
+  "published_at": "2026-02-09T07:21:42.714891Z"
 }
