@@ -7,7 +7,7 @@
   "remote_url": "https://github.com/kuroronrobins/GithubUploader.git",
   "version": {
     "stable": "0.3.0",
-    "develop": "0.3.0"
+    "develop": "0.2.0"
   },
   "paths": {
     "exclude": [

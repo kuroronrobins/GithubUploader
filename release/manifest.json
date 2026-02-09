@@ -6,7 +6,7 @@
   "channel": "stable",
   "version": "0.3.0",
   "exe_path": "release/latest/main.exe",
-  "sha256": "450fd56804db3566d9f971612e0f84c503e3ae5ae1d1560d8a905f7114bbab65",
-  "size": 7796983,
-  "published_at": "2026-02-09T06:04:58.929845Z"
+  "sha256": "deea87464316c7961f93d459b8da0a7160199dc65164c183181ca63021b16e18",
+  "size": 7797656,
+  "published_at": "2026-02-09T06:12:22.884907Z"
 }
