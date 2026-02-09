@@ -10,7 +10,7 @@ Behavior (stable channel, every run):
 - Else: run bundled main.py.
 
 Notes:
-- No GUI prompts (headless friendly).
+- If an update is available, the user is prompted (interactive console) before applying it.
 - Uses a safe "bat self-replace" pattern on Windows.
 """
 
@@ -139,6 +139,32 @@ def has_newer(remote_ver: str, local_ver: str) -> bool:
     return version_tuple(remote_ver) > version_tuple(local_ver)
 
 
+def prompt_update(remote_ver: str, local_ver: str) -> bool:
+    """Ask the user whether to apply an available update.
+
+    - Interactive console: prompt [Y/n] (default Yes)
+    - Non-interactive: default Yes (so scheduled/hidden runs don't hang)
+    """
+    try:
+        if not getattr(sys.stdin, "isatty", lambda: False)():
+            dbg("stdin is not a TTY; auto-accepting update.")
+            return True
+    except Exception:
+        return True
+
+    msg = f"[UPDATE] New version available: {local_ver} -> {remote_ver}. Update now? [Y/n]: "
+    try:
+        ans = input(msg).strip().lower()
+    except Exception:
+        return True
+    if ans in ("", "y", "yes"):
+        return True
+    if ans in ("n", "no"):
+        return False
+    # Any other input: be conservative and do not update.
+    return False
+
+
 def parse_manifest(manifest_text: str) -> Optional[Dict[str, object]]:
     try:
         obj = json.loads(manifest_text)
@@ -217,6 +243,8 @@ def replace_and_restart_windows(downloaded: Path, target: Path) -> None:
     ]
     bat_path.write_text("\r\n".join(lines), encoding="utf-8")
     print("[UPDATE] Applying update and restarting...")
+    print(f"[UPDATE] Updater batch: {bat_path}")
+    print(f"[UPDATE] Updater log:  {log_path}")
     try:
         subprocess.Popen(
             ["cmd", "/c", str(bat_path)],
@@ -266,6 +294,11 @@ def try_self_update(config: Dict[str, object]) -> bool:
 
     dbg(f"Local version={local_ver}, Remote version={remote_ver}")
     if not has_newer(remote_ver, local_ver):
+        return False
+
+    # Ask the user before applying update (interactive console).
+    if not prompt_update(remote_ver=remote_ver, local_ver=local_ver):
+        print("[UPDATE] Skipped by user.")
         return False
 
     exe_url = build_raw_url(owner, repo, exe_path, DEFAULT_BRANCH)
