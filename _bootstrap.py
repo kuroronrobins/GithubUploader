@@ -4,9 +4,9 @@
 Bootstrap entry for the packaged executable.
 
 Behavior (stable channel, every run):
-- Read embedded config + embedded version.
+- Read embedded config (includes version.stable).
 - Fetch release manifest from GitHub stable branch (fixed path).
-- If remote version > embedded version: download fixed-path latest exe, replace self, restart.
+- If remote version > local version: download fixed-path latest exe, replace self, restart.
 - Else: run bundled main.py.
 
 Notes:
@@ -33,9 +33,8 @@ DEFAULT_BRANCH = "stable"
 RELEASE_MANIFEST_PATH = "release/manifest.json"  # fixed
 HTTP_TIMEOUT = 15
 
-# These placeholders are replaced during build by _gitup.py
+# This placeholder is replaced during build by _gitup.py
 EMBEDDED_CONFIG_JSON = "__EMBEDDED_CONFIG_JSON__"
-EMBEDDED_VERSION = "__EMBEDDED_APP_VERSION__"
 
 
 def debug_enabled() -> bool:
@@ -64,12 +63,22 @@ def load_embedded_config() -> Dict[str, object]:
     return {}
 
 
-def embedded_version() -> str:
+def app_version(config: Dict[str, object]) -> str:
+    """Return the app version embedded into this executable.
+
+    We intentionally derive the local version from the embedded config (version.stable)
+    to avoid fragile template-replacement issues.
+    """
     try:
-        v = str(EMBEDDED_VERSION or "0.0.0")
-        return v if v != "__EMBEDDED_APP_VERSION__" else "0.0.0"
+        ver = config.get("version")
+        if isinstance(ver, dict):
+            v = ver.get("stable")
+            if v is not None:
+                s = str(v).strip()
+                return s if s else "0.0.0"
     except Exception:
-        return "0.0.0"
+        pass
+    return "0.0.0"
 
 
 def remote_url(config: Dict[str, object]) -> str:
@@ -270,7 +279,7 @@ def replace_and_restart(downloaded: Path, target: Path) -> None:
         print(f"[UPDATE] Replace failed: {exc}")
 
 
-def try_self_update(config: Dict[str, object]) -> bool:
+def try_self_update(config: Dict[str, object], local_ver: str) -> bool:
     url = remote_url(config)
     if not url:
         dbg("Remote URL not set; skipping update check.")
@@ -282,7 +291,6 @@ def try_self_update(config: Dict[str, object]) -> bool:
         return False
     owner, repo = parsed
 
-    local_ver = embedded_version()
     info = get_release_info(owner, repo)
     if not info:
         dbg("No release info found; skipping update.")
@@ -323,8 +331,8 @@ def try_self_update(config: Dict[str, object]) -> bool:
     return True
 
 
-def run_main() -> None:
-    print(f"[BOOT] GitHubSync version {embedded_version()}")
+def run_main(local_ver: str) -> None:
+    print(f"[BOOT] GitHubSync version {local_ver}")
     candidates = []
     if getattr(sys, "frozen", False):
         exe_dir = Path(sys.executable).resolve().parent
@@ -344,12 +352,13 @@ def run_main() -> None:
 def main() -> None:
     _ = argparse.ArgumentParser(add_help=False).parse_args([])
     config = load_embedded_config()
+    local_ver = app_version(config)
     if not config:
-        run_main()
+        run_main(local_ver)
         return
-    updated = try_self_update(config)
+    updated = try_self_update(config, local_ver)
     if not updated:
-        run_main()
+        run_main(local_ver)
 
 
 if __name__ == "__main__":

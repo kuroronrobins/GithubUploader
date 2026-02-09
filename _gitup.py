@@ -370,10 +370,11 @@ def place_latest_exe(cfg: AppConfig, built_exe: Path) -> Path:
     return dst
 
 
-def build_exe(cfg: AppConfig, embedded_version: str, extra_pyinstaller_opts: Optional[List[str]] = None) -> Optional[Path]:
-    """
-    Builds a onefile exe into dist/ and returns the path if successful.
-    embedded_version: version string embedded into bootstrap, used for update comparison.
+def build_exe(cfg: AppConfig, extra_pyinstaller_opts: Optional[List[str]] = None) -> Optional[Path]:
+    """Build a onefile exe into dist/ and return the path if successful.
+
+    The executable's *self version* is derived from the embedded config (version.stable)
+    inside the bootstrap at runtime.
     """
     ensure_git_repo()
     exe_name = cfg.exe_name or "main"
@@ -401,10 +402,8 @@ def build_exe(cfg: AppConfig, embedded_version: str, extra_pyinstaller_opts: Opt
 
     bootstrap_template = (base_dir() / "_bootstrap.py").read_text(encoding="utf-8")
     embedded_config_json = json.dumps(cfg.to_dict(), ensure_ascii=False)
-    bootstrap_text = (
-        bootstrap_template.replace('"__EMBEDDED_CONFIG_JSON__"', json.dumps(embedded_config_json))
-        .replace('"__EMBEDDED_APP_VERSION__"', json.dumps(embedded_version or "0.0.0"))
-    )
+    # Embed config JSON into the bootstrap source. The updater reads version.stable from this config.
+    bootstrap_text = bootstrap_template.replace('"__EMBEDDED_CONFIG_JSON__"', json.dumps(embedded_config_json))
     bootstrap_path = build_dir / "_bootstrap_embedded.py"
     bootstrap_path.write_text(bootstrap_text, encoding="utf-8")
 
@@ -749,7 +748,7 @@ def push_flow(cfg: AppConfig) -> None:
     if branch == DEFAULT_STABLE_BRANCH:
         if confirm("Build & publish latest exe + manifest for auto-update?", default=False):
             print(f"[INFO] Publishing release artifacts with version {cfg.stable_version or '0.0.0'} (build happens now).")
-            built = build_exe(cfg, embedded_version=cfg.stable_version or "0.0.0")
+            built = build_exe(cfg)
             if built:
                 latest_exe = place_latest_exe(cfg, built)
                 exe_rel = f"{RELEASE_LATEST_DIR}/{latest_exe.name}"
@@ -824,14 +823,23 @@ def build_flow(cfg: AppConfig) -> None:
     - This menu is for local testing only.
     - For publishing to GitHub (auto-update), use: Push -> Stable, then choose to publish release artifacts.
       (That flow decides the version first, then builds, so the published exe/manifest versions always match.)
+    - The updater compares versions using the embedded config field: version.stable.
+      If you build locally without setting a version, it will be treated as 0.0.0 and you'll always see an update prompt.
     """
     print("[INFO] Build exe (local test).")
     print("[INFO] To publish a new version for auto-update, use: Push -> Stable and answer YES to publish.")
     print("[INFO] That flow builds AFTER the version is decided, preventing version mismatches.")
+
+    # Let users embed a version for local builds to avoid showing 0.0.0 all the time.
+    embed_default = cfg.stable_version or "0.0.0"
+    embed = input_with_default("Version for this build (embedded as version.stable)", embed_default).strip() or embed_default
+    cfg.stable_version = embed
+    if cfg.stable_version == "0.0.0":
+        print("[WARN] Version is 0.0.0. If you want the build to identify itself, set a stable version and rebuild.")
+
     additional = input("Additional PyInstaller options (empty for none): ").strip()
     opts = additional.split() if additional else []
-    embedded_version = cfg.stable_version or "0.0.0"
-    _ = build_exe(cfg, embedded_version=embedded_version, extra_pyinstaller_opts=opts)
+    _ = build_exe(cfg, extra_pyinstaller_opts=opts)
 
 
 # ------------------------------------------------------------
