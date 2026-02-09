@@ -243,12 +243,15 @@ def replace_and_restart_windows(downloaded: Path, target: Path) -> None:
         "move /Y \"%DSTNEW%\" \"%DST%\" >>\"%LOG%\" 2>&1",
         "if %errorlevel% neq 0 (call :LOG Move DSTNEW->DST failed & goto END)",
         "call :LOG Restarting",
-        "call :LOG Launching updated exe (cmd start)",
-        "start \"\" /D \"%DSTDIR%\" \"%DST%\"",
-        "if %errorlevel% neq 0 (",
-        "  call :LOG cmd start failed; trying PowerShell Start-Process",
+        "call :LOG Launching updated exe (same console)",
+        "pushd \"%DSTDIR%\"",
+        "start \"\" /b \"%DST%\"",
+        'set "STARTERR=!errorlevel!"',
+        "popd",
+        "if !STARTERR! neq 0 (",
+        "  call :LOG cmd start /b failed; trying PowerShell Start-Process",
         "  %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"Start-Process -FilePath '%DST%' -WorkingDirectory '%DSTDIR%'\" >>\"%LOG%\" 2>&1",
-        "  if %errorlevel% neq 0 (call :LOG PowerShell Start-Process failed & goto END)",
+        "  if !errorlevel! neq 0 (call :LOG PowerShell Start-Process failed & goto END)",
         ")",
         "del /F /Q \"%SRC%\" >nul 2>&1",
         "call :LOG Updater finished",
@@ -264,10 +267,9 @@ def replace_and_restart_windows(downloaded: Path, target: Path) -> None:
     print(f"[UPDATE] Updater batch: {bat_path}")
     print(f"[UPDATE] Updater log:  {log_path}")
     try:
-        subprocess.Popen(
-            ["cmd", "/c", str(bat_path)],
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
+        # Attach updater to the current console so the restarted app is visible
+        # when the user launched the exe from a terminal.
+        subprocess.Popen(["cmd", "/c", str(bat_path)])
     except Exception as exc:
         print(f"[UPDATE] Failed to launch updater batch: {exc}")
         return
