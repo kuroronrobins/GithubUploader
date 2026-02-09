@@ -215,6 +215,11 @@ def replace_and_restart_windows(downloaded: Path, target: Path) -> None:
     dst_new = target.with_suffix(target.suffix + ".new")
     dst_old = target.with_suffix(target.suffix + ".old")
 
+    # NOTE: Restart reliability
+    # We intentionally *run the updated exe inline* ("%DST%") instead of relying
+    # on `start` / PowerShell Start-Process, which can fail silently depending on
+    # how the original exe was launched (PowerShell, Explorer, policies, etc.).
+    # Running inline guarantees the updated process actually starts.
     lines = [
         "@echo off",
         "chcp 65001 >nul",
@@ -243,18 +248,12 @@ def replace_and_restart_windows(downloaded: Path, target: Path) -> None:
         "move /Y \"%DSTNEW%\" \"%DST%\" >>\"%LOG%\" 2>&1",
         "if %errorlevel% neq 0 (call :LOG Move DSTNEW->DST failed & goto END)",
         "call :LOG Restarting",
-        "call :LOG Launching updated exe (new window)",
-        "call :LOG Trying PowerShell Start-Process",
+        "call :LOG Launching updated exe (inline)",
         "pushd \"%DSTDIR%\"",
-        "  %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"Start-Process -FilePath $env:DST -WorkingDirectory $env:DSTDIR\" >>\"%LOG%\" 2>&1",
-        'set "STARTERR=!errorlevel!"',
+        "\"%DST%\"",
+        'set "RUNERR=!errorlevel!"',
         "popd",
-        "if !STARTERR! neq 0 (",
-        "  call :LOG PowerShell Start-Process failed; trying cmd start",
-        "  start \"\" /D \"%DSTDIR%\" \"%DST%\"",
-        '  set "STARTERR=!errorlevel!"',
-        "  if !STARTERR! neq 0 (call :LOG cmd start failed & goto END)",
-        ")",
+        "call :LOG Updated exe exited with code !RUNERR!",
         "del /F /Q \"%SRC%\" >nul 2>&1",
         "call :LOG Updater finished",
         ":END",
