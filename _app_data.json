@@ -1,0 +1,30 @@
+{
+  "app": {
+    "name": "GitHubSync",
+    "exe_name": "main",
+    "remote_base": "https://github.com/kuroronrobins"
+  },
+  "remote_url": "https://github.com/kuroronrobins/GithubUploader.git",
+  "version": {
+    "stable": "0.10.0",
+    "develop": "0.2.0"
+  },
+  "paths": {
+    "exclude": [
+      "build/",
+      "dist/",
+      ".git/",
+      "__pycache__/",
+      ".venv/"
+    ],
+    "stage_protected": [
+      "build/",
+      "dist/",
+      "__pycache__/",
+      "*.pyc",
+      "*.pyd",
+      "*.pyo",
+      "release/latest/*.exe"
+    ]
+  }
+}
