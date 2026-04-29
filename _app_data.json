@@ -1,0 +1,63 @@
+{
+  "app": {
+    "name": "GitUp Manager",
+    "exe_name": "GitUp Manager.exe"
+  },
+  "remote_url": "https://github.com/kuroronrobins/GithubUploader.git",
+  "branches": {
+    "stable": "stable",
+    "develop": "develop",
+    "default_pull": "develop",
+    "default_push": "develop"
+  },
+  "paths": {
+    "exclude": [
+      ".git/",
+      ".gitup/",
+      "build/",
+      "dist/",
+      "__pycache__/",
+      ".pytest_cache/",
+      ".venv/",
+      "*.pyc",
+      "*.pyo",
+      "*.pyd",
+      "*.spec"
+    ],
+    "stage_protected": [
+      "_gitup.py",
+      "GitUp Manager.exe",
+      "_app_data.json",
+      "_bootstrap.py",
+      "_bootstrap_patch_helper.txt",
+      "release/",
+      "build/",
+      "dist/",
+      "__pycache__/",
+      ".pytest_cache/",
+      "*.pyc",
+      "*.pyo",
+      "*.pyd",
+      "*.spec"
+    ]
+  },
+  "ai": {
+    "enabled": true,
+    "provider": "openai",
+    "api": "responses",
+    "mode": "auto",
+    "models": {
+      "quick_classification": "gpt-5.4-nano",
+      "commit_summary": "gpt-5.4-mini",
+      "conflict_explanation": "gpt-5.4-mini",
+      "deep_diagnosis": "gpt-5.4",
+      "codex_grade_review": "gpt-5.5"
+    },
+    "reasoning_effort": {
+      "quick_classification": "low",
+      "commit_summary": "low",
+      "conflict_explanation": "medium",
+      "deep_diagnosis": "medium"
+    }
+  }
+}
