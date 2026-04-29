@@ -97,6 +97,8 @@ DEFAULT_AI_MODELS = {
     "codex_grade_review": "gpt-5.5",
 }
 
+DEFAULT_CLONE_TIMEOUT_SECONDS = 0
+
 DEFAULT_REASONING = {
     "quick_classification": "low",
     "commit_summary": "low",
@@ -612,6 +614,49 @@ def run_git_bytes(project_root: Path, args: Sequence[str]) -> subprocess.Complet
     )
 
 
+def clone_timeout_seconds() -> Optional[int]:
+    raw = os.environ.get("GITUP_CLONE_TIMEOUT_SECONDS", str(DEFAULT_CLONE_TIMEOUT_SECONDS)).strip()
+    try:
+        seconds = int(raw)
+    except ValueError:
+        return None
+    return seconds if seconds > 0 else None
+
+
+def clone_repository(remote_url: str, branch: str, clone_dir: Path) -> Tuple[bool, str]:
+    cmd = [
+        "git",
+        "clone",
+        "--progress",
+        "--branch",
+        branch,
+        "--single-branch",
+        remote_url,
+        str(clone_dir),
+    ]
+    env = git_env()
+    env["GIT_PROGRESS_DELAY"] = "1"
+    timeout_seconds = clone_timeout_seconds()
+    try:
+        cp = subprocess.run(
+            cmd,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=False,
+            env=env,
+            timeout=timeout_seconds,
+        )
+        if cp.returncode != 0:
+            return False, f"git clone failed with exit code {cp.returncode}"
+        return True, ""
+    except subprocess.TimeoutExpired:
+        minutes = max(1, (timeout_seconds or 60) // 60)
+        return False, f"git clone timed out after {minutes} minutes"
+    except Exception as exc:
+        return False, str(exc)
+
+
 def git_path(project_root: Path, logical_name: str) -> Path:
     cp = run_git(project_root, ["rev-parse", "--git-path", logical_name])
     if cp.returncode != 0:
@@ -1002,17 +1047,10 @@ def bootstrap_flow(project_root: Path, cfg: AppConfig, no_restart: bool = False,
             safe_move(item, seed_dir / item.name)
             moved_seed = True
 
-        print_info("GitHubから初回取得しています。")
-        cp = subprocess.run(
-            ["git", "clone", "--branch", branch, "--single-branch", cfg.remote_url, str(clone_dir)],
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
-            env=git_env(),
-        )
-        if cp.returncode != 0:
-            raise RuntimeError(cp.stderr.strip() or cp.stdout.strip() or "git clone failed")
+        print_info("GitHubから初回取得しています。進捗が表示されます。")
+        ok, message = clone_repository(cfg.remote_url, branch, clone_dir)
+        if not ok:
+            raise RuntimeError(message)
 
         for item in clone_dir.iterdir():
             if item.name == ".gitup":
@@ -1114,17 +1152,10 @@ def rebuild_from_github_flow(
     clone_dir = temp_parent / "repo"
     moved_current = False
     try:
-        print_info("GitHub版を一時フォルダへcloneしています。")
-        cp = subprocess.run(
-            ["git", "clone", "--branch", target_branch, "--single-branch", remote_url, str(clone_dir)],
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
-            env=git_env(),
-        )
-        if cp.returncode != 0:
-            raise RuntimeError(cp.stderr.strip() or cp.stdout.strip() or "git clone failed")
+        print_info("GitHub版を一時フォルダへcloneしています。進捗が表示されます。")
+        ok, message = clone_repository(remote_url, target_branch, clone_dir)
+        if not ok:
+            raise RuntimeError(message)
 
         for item in list(project_root.iterdir()):
             if item.name == ".gitup":
