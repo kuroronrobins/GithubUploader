@@ -356,6 +356,25 @@ def launch_shadow_or_exit(args: argparse.Namespace, original_argv: Sequence[str]
 # ---------------------------------------------------------------------------
 
 
+def config_bool(value: object, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return default
+
+
+def config_int(value: object, default: int) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except Exception:
+        return default
+
+
 @dataclass
 class AppConfig:
     app_name: str = "GitUp Manager"
@@ -367,6 +386,10 @@ class AppConfig:
     default_push: str = DEFAULT_BRANCH
     exclude: List[str] = field(default_factory=lambda: DEFAULT_EXCLUDES.copy())
     stage_protected: List[str] = field(default_factory=lambda: DEFAULT_STAGE_PROTECTED.copy())
+    bootstrap_shallow: bool = True
+    bootstrap_depth: int = 1
+    bootstrap_filter: str = ""
+    bootstrap_skip_lfs_smudge: bool = False
     ai_enabled: bool = True
     ai_provider: str = "openai"
     ai_api: str = "responses"
@@ -379,6 +402,7 @@ class AppConfig:
         app = data.get("app") if isinstance(data.get("app"), dict) else {}
         branches = data.get("branches") if isinstance(data.get("branches"), dict) else {}
         paths = data.get("paths") if isinstance(data.get("paths"), dict) else {}
+        bootstrap = data.get("bootstrap") if isinstance(data.get("bootstrap"), dict) else {}
         ai = data.get("ai") if isinstance(data.get("ai"), dict) else {}
 
         version = data.get("version") if isinstance(data.get("version"), dict) else {}
@@ -398,6 +422,10 @@ class AppConfig:
             default_push=str(branches.get("default_push") or stable),
             exclude=list(paths.get("exclude") or DEFAULT_EXCLUDES),
             stage_protected=list(paths.get("stage_protected") or DEFAULT_STAGE_PROTECTED),
+            bootstrap_shallow=config_bool(bootstrap.get("shallow"), True),
+            bootstrap_depth=config_int(bootstrap.get("depth"), 1),
+            bootstrap_filter=str(bootstrap.get("filter") or ""),
+            bootstrap_skip_lfs_smudge=config_bool(bootstrap.get("skip_lfs_smudge"), False),
             ai_enabled=bool(ai.get("enabled", True)),
             ai_provider=str(ai.get("provider") or "openai"),
             ai_api=str(ai.get("api") or "responses"),
@@ -422,6 +450,8 @@ class AppConfig:
             self.ai_models.setdefault(key, value)
         for key, value in DEFAULT_REASONING.items():
             self.ai_reasoning_effort.setdefault(key, value)
+        if self.bootstrap_depth < 1:
+            self.bootstrap_depth = 1
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -439,6 +469,12 @@ class AppConfig:
             "paths": {
                 "exclude": self.exclude,
                 "stage_protected": self.stage_protected,
+            },
+            "bootstrap": {
+                "shallow": self.bootstrap_shallow,
+                "depth": self.bootstrap_depth,
+                "filter": self.bootstrap_filter,
+                "skip_lfs_smudge": self.bootstrap_skip_lfs_smudge,
             },
             "ai": {
                 "enabled": self.ai_enabled,
@@ -623,7 +659,7 @@ def clone_timeout_seconds() -> Optional[int]:
     return seconds if seconds > 0 else None
 
 
-def clone_repository(remote_url: str, branch: str, clone_dir: Path) -> Tuple[bool, str]:
+def clone_repository(remote_url: str, branch: str, clone_dir: Path, cfg: Optional[AppConfig] = None) -> Tuple[bool, str]:
     cmd = [
         "git",
         "clone",
@@ -631,11 +667,22 @@ def clone_repository(remote_url: str, branch: str, clone_dir: Path) -> Tuple[boo
         "--branch",
         branch,
         "--single-branch",
-        remote_url,
-        str(clone_dir),
     ]
+    mode_parts = ["single branch"]
+    if cfg and cfg.bootstrap_shallow:
+        depth = max(1, cfg.bootstrap_depth)
+        cmd.extend(["--depth", str(depth)])
+        mode_parts.append(f"depth={depth}")
+    if cfg and cfg.bootstrap_filter:
+        cmd.extend(["--filter", cfg.bootstrap_filter])
+        mode_parts.append(f"filter={cfg.bootstrap_filter}")
+    cmd.extend([remote_url, str(clone_dir)])
     env = git_env()
     env["GIT_PROGRESS_DELAY"] = "1"
+    if cfg and cfg.bootstrap_skip_lfs_smudge:
+        env["GIT_LFS_SKIP_SMUDGE"] = "1"
+        mode_parts.append("LFS skip smudge")
+    print_info("clone mode: " + ", ".join(mode_parts))
     timeout_seconds = clone_timeout_seconds()
     try:
         cp = subprocess.run(
@@ -1048,7 +1095,7 @@ def bootstrap_flow(project_root: Path, cfg: AppConfig, no_restart: bool = False,
             moved_seed = True
 
         print_info("GitHubから初回取得しています。進捗が表示されます。")
-        ok, message = clone_repository(cfg.remote_url, branch, clone_dir)
+        ok, message = clone_repository(cfg.remote_url, branch, clone_dir, cfg)
         if not ok:
             raise RuntimeError(message)
 
@@ -1153,7 +1200,7 @@ def rebuild_from_github_flow(
     moved_current = False
     try:
         print_info("GitHub版を一時フォルダへcloneしています。進捗が表示されます。")
-        ok, message = clone_repository(remote_url, target_branch, clone_dir)
+        ok, message = clone_repository(remote_url, target_branch, clone_dir, cfg)
         if not ok:
             raise RuntimeError(message)
 

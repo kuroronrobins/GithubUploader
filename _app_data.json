@@ -41,6 +41,12 @@
       "*.spec"
     ]
   },
+  "bootstrap": {
+    "shallow": true,
+    "depth": 1,
+    "filter": "",
+    "skip_lfs_smudge": false
+  },
   "ai": {
     "enabled": true,
     "provider": "openai",
