@@ -1060,6 +1060,114 @@ def restart_official(project_root: Path) -> None:
         print_warn(f"正式版の再起動に失敗しました: {exc}")
 
 
+def rebuild_from_github_flow(
+    project_root: Path,
+    cfg: AppConfig,
+    branch: Optional[str] = None,
+    no_restart: bool = False,
+    non_interactive: bool = False,
+) -> bool:
+    remote_url = cfg.remote_url
+    if inside_git_repo(project_root):
+        cp = run_git(project_root, ["remote", "get-url", DEFAULT_REMOTE])
+        if cp.returncode == 0 and cp.stdout.strip():
+            remote_url = cp.stdout.strip()
+    if not remote_url:
+        if non_interactive:
+            print_error("remote_urlが未設定です。")
+            return False
+        remote_url = input_default("GitHub URL", cfg.remote_url)
+        cfg.remote_url = remote_url
+        save_config(project_root, cfg)
+    if not remote_url:
+        print_error("GitHub URLが未設定です。")
+        return False
+
+    target_branch = branch or get_branch(project_root) or branch_default(cfg, pull=True)
+    if not non_interactive:
+        target_branch = input_default("GitHubからコピーするブランチ", target_branch)
+    if not target_branch:
+        target_branch = DEFAULT_BRANCH
+
+    print_warn("現在フォルダの内容をGitHub版で完全に作り直します。")
+    print_warn("現在の内容は .gitup/backups に退避しますが、作業ツリーはGitHub版へ置き換わります。")
+    if not confirm("実行しますか？", default=False, non_interactive=non_interactive):
+        print_info("キャンセルしました。")
+        return False
+
+    ensure_runtime_dirs(project_root)
+    backup = backups_dir(project_root) / f"{now_stamp()}_rebuild_from_github"
+    current_dir = backup / "current"
+    failed_dir = backup / "failed_partial"
+    current_dir.mkdir(parents=True, exist_ok=True)
+    metadata = {
+        "operation": "rebuild_from_github",
+        "remote_url": remote_url,
+        "branch": target_branch,
+        "created_at": _dt.datetime.now().isoformat(timespec="seconds"),
+        "project_root": str(project_root),
+        "previous_head": get_head(project_root) if inside_git_repo(project_root) else "",
+    }
+    (backup / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    temp_parent = Path(tempfile.mkdtemp(prefix="gitup_rebuild_"))
+    clone_dir = temp_parent / "repo"
+    moved_current = False
+    try:
+        print_info("GitHub版を一時フォルダへcloneしています。")
+        cp = subprocess.run(
+            ["git", "clone", "--branch", target_branch, "--single-branch", remote_url, str(clone_dir)],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            env=git_env(),
+        )
+        if cp.returncode != 0:
+            raise RuntimeError(cp.stderr.strip() or cp.stdout.strip() or "git clone failed")
+
+        for item in list(project_root.iterdir()):
+            if item.name == ".gitup":
+                continue
+            safe_move(item, current_dir / item.name)
+            moved_current = True
+
+        for item in list(clone_dir.iterdir()):
+            if item.name == ".gitup":
+                continue
+            shutil.move(str(item), str(project_root / item.name))
+
+        loaded_cfg = load_config(project_root)
+        if loaded_cfg.remote_url != remote_url:
+            loaded_cfg.remote_url = remote_url
+            save_config(project_root, loaded_cfg)
+        if inside_git_repo(project_root):
+            run_git(project_root, ["remote", "set-url", DEFAULT_REMOTE, remote_url])
+            run_git(project_root, ["checkout", target_branch])
+            run_git(project_root, ["branch", "--set-upstream-to", remote_branch_ref(target_branch), target_branch])
+
+        print_info("GitHub版で完全に作り直しました。以前の内容はバックアップに退避済みです。")
+        print_info(f"バックアップ: {backup}")
+        log_event(project_root, f"rebuild_from_github completed branch={target_branch}")
+        if not no_restart:
+            restart_official(project_root)
+        return True
+    except Exception as exc:
+        print_error("GitHub版での作り直しに失敗しました。可能な範囲で元の内容を復元します。", str(exc))
+        if moved_current:
+            failed_dir.mkdir(parents=True, exist_ok=True)
+            for item in list(project_root.iterdir()):
+                if item.name == ".gitup":
+                    continue
+                safe_move(item, failed_dir / item.name)
+            for item in list(current_dir.iterdir()):
+                safe_move(item, project_root / item.name)
+        log_event(project_root, f"rebuild_from_github failed: {exc}")
+        return False
+    finally:
+        shutil.rmtree(temp_parent, ignore_errors=True)
+
+
 # ---------------------------------------------------------------------------
 # OpenAI key storage and model routing
 # ---------------------------------------------------------------------------
@@ -1959,7 +2067,8 @@ def diagnostics_menu(project_root: Path, cfg: AppConfig) -> None:
         print("[2] remote originを設定/更新")
         print("[3] upstreamを現在branchに設定")
         print("[4] 高度: --force-with-lease")
-        print("[5] 戻る")
+        print("[5] GitHub版で完全に作り直す")
+        print("[6] 戻る")
         choice = input("番号: ").strip()
         if choice == "1":
             cp = run_git(project_root, ["status", "--short", "--branch"])
@@ -1979,6 +2088,8 @@ def diagnostics_menu(project_root: Path, cfg: AppConfig) -> None:
         elif choice == "4":
             force_with_lease_flow(project_root, cfg)
         elif choice == "5":
+            rebuild_from_github_flow(project_root, cfg)
+        elif choice == "6":
             return
 
 
@@ -2085,6 +2196,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--push", nargs="?", const="", help="Pushを実行")
     parser.add_argument("--cleanup-dry-run", action="store_true", help="不要ファイル整理候補を表示")
     parser.add_argument("--resolve-conflicts", choices=["local", "remote"], help="衝突を指定側で解消")
+    parser.add_argument("--rebuild-from-github", nargs="?", const="", help="GitHub版で完全に作り直す")
     return parser.parse_args(argv)
 
 
@@ -2112,6 +2224,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
     if args.resolve_conflicts:
         return 0 if conflict_wizard(project_root, default_choice=args.resolve_conflicts) else 1
+    if args.rebuild_from_github is not None:
+        return (
+            0
+            if rebuild_from_github_flow(
+                project_root,
+                cfg,
+                branch=args.rebuild_from_github or None,
+                no_restart=args.no_restart,
+                non_interactive=args.non_interactive,
+            )
+            else 1
+        )
 
     main_menu(project_root, cfg)
     return 0
