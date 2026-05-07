@@ -35,7 +35,7 @@ except Exception:  # pragma: no cover - optional dependency
     OpenAI = None  # type: ignore[assignment]
 
 
-APP_VERSION = "4.0.0"
+APP_VERSION = "4.0.1"
 APP_DATA_FILE = "_app_data.json"
 STATE_FILE = ".gitup/state.json"
 DEFAULT_REMOTE = "origin"
@@ -797,7 +797,7 @@ def diagnose(project_root: Path, cfg: Optional[AppConfig] = None, fetch_known: b
     doctor.is_repo = inside_git_repo(project_root)
     doctor.exe_lock_possible = not doctor.shadow_active and (project_root / "GitUp Manager.exe").exists() and is_windows()
     if not doctor.is_repo:
-        doctor.recommendation = "初回取得を実行してGitHubからプロジェクトを取得します。"
+        doctor.recommendation = "PushでこのPCの内容を初回登録できます。GitHubから取得する場合はPull/初回取得を使います。"
         doctor.safety = "warning"
         return doctor
 
@@ -1483,6 +1483,37 @@ def fetch_origin(project_root: Path, branch: Optional[str] = None) -> bool:
     return True
 
 
+def missing_remote_branch_message(text: str, branch: str) -> bool:
+    lowered = text.lower()
+    return (
+        "couldn't find remote ref" in lowered
+        or "could not find remote ref" in lowered
+        or "no matching remote head" in lowered
+        or f"remote ref {branch.lower()} not found" in lowered
+    )
+
+
+def fetch_remote_branch_for_publish(project_root: Path, branch: str) -> Optional[bool]:
+    cp = run_git(project_root, ["fetch", DEFAULT_REMOTE, branch])
+    if cp.returncode == 0:
+        return True
+    message = cp.stdout + cp.stderr
+    if missing_remote_branch_message(message, branch):
+        return False
+    print_error(f"GitHubブランチ '{branch}' の確認に失敗しました。", cp.stderr)
+    return None
+
+
+def fetch_branch_for_push(project_root: Path, branch: str) -> bool:
+    exists = fetch_remote_branch_for_publish(project_root, branch)
+    if exists is None:
+        return False
+    if not exists:
+        print_info(f"GitHub側にブランチ '{branch}' はまだありません。Push時に作成します。")
+        return True
+    return True
+
+
 def checkout_branch(project_root: Path, branch: str, start_point: Optional[str] = None) -> bool:
     cp = run_git(project_root, ["rev-parse", "--verify", branch])
     if cp.returncode == 0:
@@ -1672,6 +1703,167 @@ def manual_commit_message(default: str, non_interactive: bool = False) -> str:
     return value or default
 
 
+def initialize_local_repository(project_root: Path, branch: str) -> bool:
+    cp = run_git(project_root, ["init"])
+    if cp.returncode != 0:
+        print_error("git init に失敗しました。", cp.stderr)
+        return False
+    cp = run_git(project_root, ["checkout", "-B", branch])
+    if cp.returncode == 0:
+        return True
+    cp = run_git(project_root, ["symbolic-ref", "HEAD", f"refs/heads/{branch}"])
+    if cp.returncode != 0:
+        print_error(f"初回ブランチ '{branch}' を選択できませんでした。", cp.stderr)
+        return False
+    return True
+
+
+def has_initial_publish_candidates(project_root: Path, cfg: AppConfig) -> bool:
+    for item in project_root.iterdir():
+        if item.name in {".git", ".gitup"}:
+            continue
+        rel = item.name + "/" if item.is_dir() else item.name
+        if path_matches(rel, cfg.exclude):
+            continue
+        if is_system_path(rel) or path_matches(rel, cfg.stage_protected):
+            continue
+        return True
+    return False
+
+
+def initial_publish_flow(
+    project_root: Path,
+    cfg: AppConfig,
+    branch: Optional[str] = None,
+    non_interactive: bool = False,
+) -> bool:
+    if inside_git_repo(project_root):
+        return safe_push(project_root, cfg, branch=branch, non_interactive=non_interactive)
+
+    ensure_runtime_dirs(project_root)
+    ensure_gitignore(project_root, cfg)
+
+    if not cfg.remote_url:
+        if non_interactive:
+            print_error("remote_urlが_app_data.jsonにありません。")
+            return False
+        cfg.remote_url = input_default("GitHub URL", "")
+        save_config(project_root, cfg)
+    if not cfg.remote_url:
+        print_error("remote_urlが未設定です。")
+        return False
+
+    target = branch or branch_default(cfg, pull=False) or DEFAULT_BRANCH
+    if not non_interactive:
+        target = input_default("登録するブランチ", target)
+    if not target:
+        target = DEFAULT_BRANCH
+
+    if not non_interactive:
+        print_warn("現在のフォルダで git init を実行し、このPCのプロジェクトファイルをGitHubへ初回登録します。")
+        print_warn("GitUp管理ファイルは標準では除外します。必要な場合だけ次の確認で含めてください。")
+        if not confirm("初回登録を続行しますか？", default=True):
+            print_info("初回登録をキャンセルしました。")
+            return False
+
+    if not initialize_local_repository(project_root, target):
+        return False
+    ensure_identity(project_root, non_interactive=non_interactive)
+    if not ensure_remote(project_root, cfg, non_interactive=non_interactive):
+        return False
+
+    remote_exists = fetch_remote_branch_for_publish(project_root, target)
+    if remote_exists is None:
+        return False
+
+    changes = get_changes(project_root)
+    if not changes:
+        print_info("初回登録するローカルファイルが見つかりません。")
+        return False
+
+    system_changes = sorted({ch.path for ch in changes if is_system_path(ch.path)})
+    project_changes = sorted({ch.path for ch in changes if not is_system_path(ch.path)})
+    print("初回登録ファイル:")
+    for p in project_changes:
+        print(f"  [project] {p}")
+    for p in system_changes:
+        print(f"  [system]  {p}")
+
+    include_system = False
+    if system_changes and not non_interactive:
+        include_system = confirm("GitUp管理ファイルも含めますか？", default=False)
+
+    staged, skipped, system = stage_changes(project_root, cfg, include_system=include_system)
+    if skipped:
+        print("stage対象外:")
+        for p in skipped:
+            print(f"  - {p}")
+    if staged:
+        print("stage対象:")
+        for p in staged:
+            print(f"  - {p}")
+
+    if run_git(project_root, ["diff", "--cached", "--quiet"]).returncode == 0:
+        print_info("登録できるファイルがstageされませんでした。")
+        return False
+
+    prompt, _fallback = staged_summary(project_root, cfg)
+    fallback = "chore: initial project import"
+    ai_msg = openai_commit_summary(cfg, prompt, fallback)
+    commit_msg = ai_msg if ai_msg.startswith(("fix:", "feat:", "chore:", "docs:", "refactor:", "test:", "build:")) else f"chore: {ai_msg}"
+    print(f"コミット文候補: {commit_msg}")
+    if not non_interactive:
+        if not confirm("このコミット文を使いますか？", default=True):
+            commit_msg = manual_commit_message(fallback, non_interactive=False)
+
+    cp = run_git(project_root, ["commit", "-m", commit_msg])
+    if cp.returncode != 0:
+        print_error("初回コミットに失敗しました。", cp.stderr)
+        return False
+
+    if remote_exists:
+        print_warn(f"GitHub側のブランチ '{target}' は既に存在します。Push前に取り込みます。")
+        if not non_interactive and not confirm("GitHub側の内容を初回コミットへ取り込みますか？", default=True):
+            return False
+        cp = run_git(
+            project_root,
+            ["merge", "--allow-unrelated-histories", "--no-edit", remote_branch_ref(target)],
+            extra_env={"GIT_EDITOR": "true"},
+        )
+        if cp.returncode != 0:
+            print_warn("GitHub側の取り込みで衝突しました。Conflict Wizardを開始します。")
+            conflict_wizard(project_root, default_choice=None if not non_interactive else "local")
+            if conflict_paths(project_root):
+                return False
+
+    cp = run_git(project_root, ["push", "--set-upstream", DEFAULT_REMOTE, target])
+    if cp.returncode != 0:
+        print_error("初回Pushに失敗しました。", cp.stderr)
+        print_info("GitHubリポジトリが未作成の場合は、空のリポジトリを作成してからもう一度Pushしてください。")
+        return False
+
+    state = load_state(project_root)
+    state["last_successful_push"] = _dt.datetime.now().isoformat(timespec="seconds")
+    state["last_selected_branch"] = target
+    state["initial_publish"] = True
+    save_state(project_root, state)
+    print_info("初回登録が完了しました。")
+    log_event(project_root, f"initial publish completed branch={target}")
+    return True
+
+
+def first_run_flow(project_root: Path, cfg: AppConfig) -> bool:
+    default_choice = "1" if has_initial_publish_candidates(project_root, cfg) else "2"
+    print("")
+    print("このフォルダはまだGitリポジトリではありません。")
+    print("[1] このPCの内容をGitHubへ初回登録")
+    print("[2] 既存のGitHubリポジトリを取得")
+    choice = input(f"番号 [{default_choice}]: ").strip() or default_choice
+    if choice == "2":
+        return bootstrap_flow(project_root, cfg)
+    return initial_publish_flow(project_root, cfg)
+
+
 def push_existing_commits(project_root: Path, target: str) -> bool:
     push_args = ["push"] if get_upstream(project_root) else ["push", "--set-upstream", DEFAULT_REMOTE, target]
     cp = run_git(project_root, push_args)
@@ -1688,8 +1880,8 @@ def push_existing_commits(project_root: Path, target: str) -> bool:
 
 def safe_push(project_root: Path, cfg: AppConfig, branch: Optional[str] = None, non_interactive: bool = False) -> bool:
     if not inside_git_repo(project_root):
-        print_warn("まだGitHubから初回取得されていません。先に初回取得を実行します。")
-        return bootstrap_flow(project_root, cfg, non_interactive=non_interactive)
+        print_warn("このフォルダはまだGitリポジトリではありません。初回登録を開始します。")
+        return initial_publish_flow(project_root, cfg, branch=branch, non_interactive=non_interactive)
     ensure_gitignore(project_root, cfg)
     ensure_identity(project_root, non_interactive=non_interactive)
     if not ensure_remote(project_root, cfg, non_interactive=non_interactive):
@@ -1698,7 +1890,7 @@ def safe_push(project_root: Path, cfg: AppConfig, branch: Optional[str] = None, 
     target = branch or get_branch(project_root) or branch_default(cfg, pull=False)
     if not checkout_branch(project_root, target):
         return False
-    if not fetch_origin(project_root, target):
+    if not fetch_branch_for_push(project_root, target):
         return False
     set_upstream_if_needed(project_root, target)
 
@@ -2215,8 +2407,8 @@ def main_menu(project_root: Path, cfg: AppConfig) -> None:
         print_doctor(project_root, cfg, doctor)
         print("")
         print("[1] おすすめ操作を実行")
-        print("[2] Pull")
-        print("[3] Push")
+        print("[2] Pull (ダウンロード)")
+        print("[3] Push (アップロード)")
         print("[4] 衝突を解消")
         print("[5] 履歴から戻す")
         print("[6] Build GitUp Manager.exe")
@@ -2227,7 +2419,7 @@ def main_menu(project_root: Path, cfg: AppConfig) -> None:
         choice = input("番号: ").strip()
         if choice == "1":
             if not doctor.is_repo:
-                bootstrap_flow(project_root, cfg)
+                first_run_flow(project_root, cfg)
             elif doctor.conflicts or doctor.in_merge or doctor.in_rebase:
                 conflict_wizard(project_root)
             elif doctor.behind > 0 or doctor.diverged:
